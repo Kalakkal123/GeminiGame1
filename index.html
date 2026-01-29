@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Flap - High Speed Edition</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Press Start 2P', cursive;
+            user-select: none;
+        }
+
+        /* Cool Background Animation */
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(180deg, #1a2a6c, #b21f1f, #fdbb2d);
+            background-size: 400% 400%;
+            animation: gradientBG 15s ease infinite;
+        }
+
+        @keyframes gradientBG {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            color: white;
+            text-shadow: 2px 2px 0 #000;
+        }
+
+        #score-display {
+            position: absolute;
+            top: 10%;
+            font-size: 48px;
+            z-index: 10;
+        }
+
+        #start-screen, #game-over-screen {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 40px;
+            border-radius: 10px;
+            border: 4px solid #fff;
+            pointer-events: auto; /* Enable clicking on buttons */
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        h1 {
+            font-size: 40px;
+            margin-bottom: 20px;
+            color: #ffeb3b;
+        }
+
+        p {
+            font-size: 16px;
+            line-height: 1.5;
+            margin-bottom: 30px;
+        }
+
+        button {
+            background: #ff0055;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 20px;
+            font-family: 'Press Start 2P', cursive;
+            cursor: pointer;
+            box-shadow: 4px 4px 0 #880033;
+            transition: transform 0.1s;
+        }
+
+        button:active {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0 #880033;
+        }
+
+        .stats-box {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #00ffcc;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="ui-layer">
+            <div id="score-display">0</div>
+
+            <div id="start-screen">
+                <h1>NEON FLAP</h1>
+                <p>Press SPACE or Click to Jump.<br>Avoid the pipes.</p>
+                <button id="start-btn">START GAME</button>
+            </div>
+
+            <div id="game-over-screen" class="hidden">
+                <h1>GAME OVER</h1>
+                <div class="stats-box">
+                    <span>SCORE: <span id="final-score">0</span></span>
+                    <span>BEST: <span id="best-score">0</span></span>
+                </div>
+                <button id="restart-btn">TRY AGAIN</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * AUDIO SYSTEM
+         * Uses Web Audio API to generate sounds without external files.
+         */
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        const playSound = (type) => {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            if (type === 'jump') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'score') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1000, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(2000, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'crash') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.3);
+                gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            }
+        };
+
+        /**
+         * GAME LOGIC
+         */
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // UI Elements
+        const scoreEl = document.getElementById('score-display');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreEl = document.getElementById('final-score');
+        const bestScoreEl = document.getElementById('best-score');
+        const startBtn = document.getElementById('start-btn');
+        const restartBtn = document.getElementById('restart-btn');
+
+        // Game State Variables
+        let frames = 0;
+        let score = 0;
+        let highScore = localStorage.getItem('neonFlapHighScore') || 0;
+        let isRunning = false;
+        let gameSpeed = 3; // Base speed
+        let speedMultiplier = 0;
+
+        // Resize Canvas
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Game Objects
+        const bird = {
+            x: 50,
+            y: 150,
+            radius: 15,
+            velocity: 0,
+            gravity: 0.25,
+            jumpStrength: 5.5,
+            draw: function() {
+                ctx.fillStyle = '#ffeb3b';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // Eye
+                ctx.fillStyle = '#000';
+                ctx.beginPath();
+                ctx.arc(this.x + 5, this.y - 5, 3, 0, Math.PI * 2);
+                ctx.fill();
+            },
+            update: function() {
+                this.velocity += this.gravity;
+                this.y += this.velocity;
+
+                // Floor collision
+                if (this.y + this.radius >= canvas.height) {
+                    this.y = canvas.height - this.radius;
+                    gameOver();
+                }
+                
+                // Ceiling collision
+                if (this.y - this.radius <= 0) {
+                    this.y = this.radius;
+                    this.velocity = 0;
+                }
+            },
+            jump: function() {
+                this.velocity = -this.jumpStrength;
+                playSound('jump');
+            }
+        };
+
+        const pipes = {
+            items: [],
+            width: 60,
+            gap: 170,
+            dx: 3, 
+            
+            draw: function() {
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    
+                    // Gradient for pipes
+                    let grad = ctx.createLinearGradient(p.x, 0, p.x + this.width, 0);
+                    grad.addColorStop(0, '#43cbff');
+                    grad.addColorStop(1, '#9708cc');
+                    
+                    ctx.fillStyle = grad;
+                    
+                    // Top Pipe
+                    ctx.fillRect(p.x, 0, this.width, p.top);
+                    // Bottom Pipe
+                    ctx.fillRect(p.x, canvas.height - p.bottom, this.width, p.bottom);
+                    
+                    // Borders
+                    ctx.strokeStyle = "#fff";
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(p.x, 0, this.width, p.top);
+                    ctx.strokeRect(p.x, canvas.height - p.bottom, this.width, p.bottom);
+                }
+            },
+            
+            update: function() {
+                // Add new pipe every 100-ish frames (depends on speed)
+                const spacing = 350; // Distance between pipes
+                if (frames % Math.floor(spacing / (this.dx + speedMultiplier)) === 0) {
+                    // Randomize height
+                    let maxY = canvas.height - this.gap - 50;
+                    let topHeight = Math.floor(Math.random() * (maxY - 50 + 1) + 50);
+                    
+                    this.items.push({
+                        x: canvas.width,
+                        top: topHeight,
+                        bottom: canvas.height - this.gap - topHeight,
+                        passed: false
+                    });
+                }
+
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    p.x -= (this.dx + speedMultiplier);
+
+                    // Collision Detection
+                    if (
+                        bird.x + bird.radius > p.x && 
+                        bird.x - bird.radius < p.x + this.width && 
+                        (bird.y - bird.radius < p.top || bird.y + bird.radius > canvas.height - p.bottom)
+                    ) {
+                        gameOver();
+                    }
+
+                    // Score Update
+                    if (p.x + this.width < bird.x && !p.passed) {
+                        score++;
+                        scoreEl.innerText = score;
+                        p.passed = true;
+                        playSound('score');
+                        
+                        // Increase speed every 5 points
+                        if (score % 5 === 0) {
+                            speedMultiplier += 0.5;
+                        }
+                    }
+
+                    // Remove off-screen pipes
+                    if (p.x + this.width < 0) {
+                        this.items.shift();
+                        i--;
+                    }
+                }
+            },
+            reset: function() {
+                this.items = [];
+            }
+        };
+
+        const backgrounds = {
+            // Stars effect
+            stars: [],
+            init: function() {
+                for(let i=0; i<50; i++) {
+                    this.stars.push({
+                        x: Math.random() * canvas.width,
+                        y: Math.random() * canvas.height,
+                        s: Math.random() * 2
+                    });
+                }
+            },
+            draw: function() {
+                ctx.fillStyle = '#fff';
+                for(let s of this.stars) {
+                    ctx.fillRect(s.x, s.y, s.s, s.s);
+                    s.x -= 0.5; // Parallax
+                    if(s.x < 0) s.x = canvas.width;
+                }
+            }
+        };
+        backgrounds.init();
+
+        /**
+         * GAME CONTROL
+         */
+        function loop() {
+            if (!isRunning) return;
+
+            // Clear Canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Background elements
+            backgrounds.draw();
+
+            // Logic & Draw
+            pipes.update();
+            pipes.draw();
+            
+            bird.update();
+            bird.draw();
+
+            frames++;
+            requestAnimationFrame(loop);
+        }
+
+        function startGame() {
+            // Reset variables
+            bird.y = 150;
+            bird.velocity = 0;
+            pipes.reset();
+            score = 0;
+            scoreEl.innerText = score;
+            frames = 0;
+            speedMultiplier = 0;
+            
+            // UI
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            scoreEl.classList.remove('hidden');
+            
+            isRunning = true;
+            loop();
+        }
+
+        function gameOver() {
+            isRunning = false;
+            playSound('crash');
+            
+            // High Score Logic
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('neonFlapHighScore', highScore);
+            }
+
+            // Update UI
+            finalScoreEl.innerText = score;
+            bestScoreEl.innerText = highScore;
+            gameOverScreen.classList.remove('hidden');
+            scoreEl.classList.add('hidden');
+        }
+
+        // Input Handling
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                if (isRunning) bird.jump();
+                else if (!startScreen.classList.contains('hidden')) startGame();
+                else if (!gameOverScreen.classList.contains('hidden')) startGame();
+            }
+        });
+
+        canvas.addEventListener('mousedown', () => {
+            if (isRunning) bird.jump();
+        });
+
+        // Touch support for mobile
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Prevent scrolling
+            if (isRunning) bird.jump();
+        }, {passive: false});
+
+        startBtn.addEventListener('click', startGame);
+        restartBtn.addEventListener('click', startGame);
+
+    </script>
+</body>
+</html>
